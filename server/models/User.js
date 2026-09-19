@@ -7,6 +7,7 @@ const userSchema = new mongoose.Schema({
   role: { type: String, enum: ['owner', 'resident', 'maintenance_staff', 'admin'], default: 'resident' },
   phone: { type: String, default: '' },
   society: { type: String, default: 'Aster Heights' },
+  department: { type: String, default: '' },
   flat: { type: String, default: '' },
   block: { type: String, default: '' },
   floor: { type: String, default: '' },

@@ -3,6 +3,9 @@ import dns from 'node:dns'
 
 export default async function connectDB() {
   if (!process.env.MONGODB_URI) throw new Error('MONGODB_URI is missing. Copy .env.example to .env.')
+  if (process.env.MONGODB_URI.includes('<cluster>')) {
+    throw new Error('MONGODB_URI still contains <cluster>. Copy the real connection string from Atlas: Connect > Drivers.')
+  }
   let lastError
   for (let attempt = 1; attempt <= 5; attempt += 1) {
     try {

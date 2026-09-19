@@ -1,4 +1,4 @@
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api'
+const API_URL = import.meta.env.VITE_API_URL || `${window.location.protocol}//${window.location.hostname}:5000/api`
 
 async function request(path, options = {}) {
   const token = localStorage.getItem('suvidha_token')
@@ -23,6 +23,7 @@ export const api = {
   me: () => request('/auth/me'),
   complaints: () => request('/complaints'),
   createComplaint: details => request('/complaints', { method: 'POST', body: JSON.stringify(details) }),
+  rateComplaint: (id, details) => request(`/complaints/${id}/rating`, { method: 'POST', body: JSON.stringify(details) }),
   updateComplaint: (id, details) => request(`/complaints/${id}`, { method: 'PATCH', body: JSON.stringify(details) }),
   addComplaintUpdate: (id, text) => request(`/complaints/${id}/updates`, { method: 'POST', body: JSON.stringify({ text }) }),
   properties: () => request('/properties'),
@@ -46,4 +47,20 @@ export const api = {
   updateServiceProvider: (id, details) => request(`/service-providers/${id}`, { method: 'PUT', body: JSON.stringify(details) }),
   deleteServiceProvider: id => request(`/service-providers/${id}`, { method: 'DELETE' }),
   reportServiceProvider: (id, reason) => request(`/service-providers/${id}/report`, { method: 'POST', body: JSON.stringify({ reason }) }),
+  analytics: () => request('/analytics'),
+  expenses: () => request('/management/expenses'),
+  createExpense: details => request('/management/expenses', { method: 'POST', body: JSON.stringify(details) }),
+  updateExpense: (id, details) => request(`/management/expenses/${id}`, { method: 'PATCH', body: JSON.stringify(details) }),
+  deleteExpense: id => request(`/management/expenses/${id}`, { method: 'DELETE' }),
+  alerts: () => request('/management/alerts'),
+  createAlert: details => request('/management/alerts', { method: 'POST', body: JSON.stringify(details) }),
+  updateAlert: (id, details) => request(`/management/alerts/${id}`, { method: 'PATCH', body: JSON.stringify(details) }),
+  notices: () => request('/management/notices'),
+  createNotice: details => request('/management/notices', { method: 'POST', body: JSON.stringify(details) }),
+  updateNotice: (id, details) => request(`/management/notices/${id}`, { method: 'PATCH', body: JSON.stringify(details) }),
+  consumption: () => request('/management/consumption'),
+  recordConsumption: details => request('/management/consumption', { method: 'POST', body: JSON.stringify(details) }),
+  checklists: () => request('/management/checklists'),
+  saveChecklist: details => request('/management/checklists', { method: 'POST', body: JSON.stringify(details) }),
+  staff: () => request('/management/staff'),
 }

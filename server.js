@@ -11,6 +11,8 @@ import invoiceRoutes from './server/routes/invoices.js'
 import notificationRoutes from './server/routes/notifications.js'
 import residentRoutes from './server/routes/residents.js'
 import serviceProviderRoutes from './server/routes/serviceProviders.js'
+import managementRoutes from './server/routes/management.js'
+import analyticsRoutes from './server/routes/analytics.js'
 
 const app = express()
 const port = process.env.PORT || 5000
@@ -18,7 +20,7 @@ const port = process.env.PORT || 5000
 const allowedOrigin = process.env.CLIENT_URL || 'http://localhost:5173'
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || origin === allowedOrigin || /^https?:\/\/localhost:\d+$/.test(origin)) return callback(null, true)
+    if (!origin || origin === allowedOrigin || /^https?:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin)) return callback(null, true)
     callback(new Error('Origin is not allowed by CORS'))
   },
 }))
@@ -33,6 +35,8 @@ app.use('/api/invoices', invoiceRoutes)
 app.use('/api/notifications', notificationRoutes)
 app.use('/api/residents', residentRoutes)
 app.use('/api/service-providers', serviceProviderRoutes)
+app.use('/api/management', managementRoutes)
+app.use('/api/analytics', analyticsRoutes)
 app.use((err, _req, res, _next) => {
   console.error(err)
   res.status(err.status || 500).json({ message: err.message || 'Server error' })

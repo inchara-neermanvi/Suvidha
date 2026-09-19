@@ -7,11 +7,12 @@ import {
   useNavigate,
   useLocation,
 } from "react-router-dom";
-import { useEffect as reactUseEffect, useState } from "react";
+import { useEffect as reactUseEffect, useRef, useState } from "react";
 import {
   ArrowRight,
   Bell,
   Building2,
+  Camera,
   CheckCircle2,
   ClipboardList,
   CreditCard,
@@ -44,6 +45,7 @@ const ownerNav = [
   ["Payments", "/owner/payments", CreditCard],
   ["Complaints", "/owner/complaints", ClipboardList],
   ["Analytics", "/owner/analytics", Zap],
+  ["Operations", "/owner/operations", Settings],
 ];
 const residentNav = [
   ["Dashboard", "/resident", LayoutDashboard],
@@ -52,11 +54,14 @@ const residentNav = [
   ["Maintenance", "/resident/providers", Settings],
   ["Complaints", "/resident/complaints", ClipboardList],
   ["Notifications", "/resident/notifications", Bell],
+  ["Community updates", "/resident/updates", Zap],
+  ["Move checklist", "/resident/checklist", CheckCircle2],
   ["Profile", "/resident/profile", UserRound],
 ];
 const staffNav = [
   ["Dashboard", "/staff", LayoutDashboard],
   ["Assigned Complaints", "/staff/complaints", ClipboardList],
+  ["Notifications", "/staff/notifications", Bell],
   ["History", "/staff/history", Receipt],
   ["Profile", "/staff/profile", UserRound],
 ];
@@ -103,6 +108,7 @@ function Landing() {
           <a href="#how">How it works</a>
           <a href="#features">Features</a>
           <a href="#why">Why Suvidha</a>
+          <Link to="/staff/login">Staff access</Link>
         </nav>
         <Button to="/resident/login" secondary>
           Log in <ArrowRight size={15} />
@@ -125,6 +131,9 @@ function Landing() {
             </Button>
             <Button to="/resident/login" secondary>
               Resident login
+            </Button>
+            <Button to="/staff/register" secondary>
+              Join as staff
             </Button>
           </div>
           <div className="proof">
@@ -248,6 +257,8 @@ function AuthForm({ role }) {
           <p>
             {role === "owner"
               ? "Manage apartments, residents, rent, invoices and repairs from one secure workspace."
+              : role === "staff"
+                ? "Log in to see repair tasks assigned to your department and update their progress."
               : "See your apartment, rent and complaint status without chasing updates."}
           </p>
         </div>
@@ -256,7 +267,11 @@ function AuthForm({ role }) {
         <Logo />
         <span className="eyebrow">{role} login</span>
         <h2>Welcome back</h2>
-        <p>Sign in to your {role} workspace.</p>
+        <p>
+          {role === "staff"
+            ? "Use your maintenance account to see tasks assigned to your department."
+            : `Sign in to your ${role} workspace.`}
+        </p>
         <label>
           Email
           <input
@@ -287,6 +302,7 @@ function AuthForm({ role }) {
             <Link to="/resident/login">Resident login</Link>
           )}
           {role !== "staff" && <Link to="/staff/login">Staff login</Link>}
+          {role === "staff" && <Link to="/staff/register">Create staff account</Link>}
         </div>
       </form>
     </div>
@@ -1516,27 +1532,91 @@ function OwnerProperties() {
 }
 function ComplaintsPage({ role = "resident" }) {
   const [complaints, setComplaints] = useState([]);
+  const [staff, setStaff] = useState([]);
   const [message, setMessage] = useState("");
+  const [photos, setPhotos] = useState([]);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const videoRef = useRef(null);
+  const cameraStream = useRef(null);
+  const openCamera = async () => {
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error("Live camera is not available in this browser.");
+      cameraStream.current = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
+      setCameraOpen(true);
+      requestAnimationFrame(() => {
+        if (videoRef.current) videoRef.current.srcObject = cameraStream.current;
+      });
+    } catch (error) {
+      setMessage(error.message || "Camera permission is required to take a photo.");
+    }
+  };
+  const closeCamera = () => {
+    cameraStream.current?.getTracks().forEach((track) => track.stop());
+    cameraStream.current = null;
+    setCameraOpen(false);
+  };
+  const takePhoto = () => {
+    const video = videoRef.current;
+    if (!video?.videoWidth) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext("2d").drawImage(video, 0, 0);
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      setPhotos((current) => [...current, new File([blob], `problem-${Date.now()}.jpg`, { type: "image/jpeg" })].slice(0, 5));
+      closeCamera();
+    }, "image/jpeg", 0.86);
+  };
   const load = () =>
     api
       .complaints()
       .then(setComplaints)
       .catch((error) => setMessage(error.message));
   useEffect(load, []);
+  useEffect(() => { if (role === "owner") api.staff().then(setStaff).catch(() => {}); }, [role]);
+  const assign = async (complaintId, assignedStaffUser) => {
+    const person = staff.find((item) => item._id === assignedStaffUser);
+    try { await api.updateComplaint(complaintId, { assignedStaffUser: person?._id || null, assignedStaff: person?.name || "Unassigned", assignedStaffPhone: person?.phone || "", assignedAt: person ? new Date() : null, status: person ? "Assigned" : "Pending" }); setMessage("Assignment updated."); load(); } catch (error) { setMessage(error.message); }
+  };
   const submit = async (event) => {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
     try {
+      if (!photos.length) {
+        setMessage("Add at least one photo of the problem.");
+        return;
+      }
+      const media = await Promise.all(
+        photos.map(async (file) => ({
+          name: file.name,
+          type: file.type,
+          url: await compressQrImage(file),
+        })),
+      );
       await api.createComplaint({
         title: form.get("title"),
-        description: form.get("description"),
         category: form.get("category"),
         flat: form.get("flat"),
         location: form.get("location"),
         priority: form.get("priority"),
+        media,
       });
       setMessage("Complaint created.");
-      event.currentTarget.reset();
+      formElement.reset();
+      setPhotos([]);
+      load();
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+  const rate = async (event, complaintId) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    try {
+      await api.rateComplaint(complaintId, { rating: form.get("rating"), review: form.get("review") });
+      setMessage("Worker rating saved.");
       load();
     } catch (error) {
       setMessage(error.message);
@@ -1583,10 +1663,39 @@ function ComplaintsPage({ role = "resident" }) {
               <input name="location" />
             </label>
           </div>
-          <label>
-            Description
-            <textarea name="description" rows="4" required />
-          </label>
+          <div className="photo-upload">
+            <span>Photos</span>
+            <button className="photo-button" type="button" onClick={openCamera}>
+              <Camera size={16} /> Open camera
+            </button>
+            <button className="photo-button" type="button" onClick={openCamera}>
+              <Camera size={16} /> Take another photo
+            </button>
+            <small>Use the live camera to take 1 to 5 photos of the problem.</small>
+            {photos.length > 0 && (
+              <div className="photo-previews">
+                {photos.map((photo, index) => (
+                  <div className="photo-preview" key={`${photo.name}-${index}`}>
+                    <img src={URL.createObjectURL(photo)} alt="Problem preview" />
+                    <button type="button" onClick={() => setPhotos((current) => current.filter((_, photoIndex) => photoIndex !== index))} aria-label={`Remove ${photo.name}`}>
+                      <X size={13} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          {cameraOpen && (
+            <div className="camera-modal" role="dialog" aria-label="Take a problem photo">
+              <div className="camera-view">
+                <video ref={videoRef} autoPlay playsInline />
+                <div className="camera-actions">
+                  <button className="button outline" type="button" onClick={closeCamera}>Cancel</button>
+                  <button className="button coral" type="button" onClick={takePhoto}><Camera size={15} /> Capture</button>
+                </div>
+              </div>
+            </div>
+          )}
           <label>
             Priority
             <select name="priority" defaultValue="Medium">
@@ -1613,6 +1722,9 @@ function ComplaintsPage({ role = "resident" }) {
               <tr>
                 <th>Problem</th>
                 <th>Category</th>
+                <th>Assigned worker</th>
+                <th>Phone</th>
+                <th>Worker rating</th>
                 <th>Status</th>
                 <th>Priority</th>
               </tr>
@@ -1627,6 +1739,35 @@ function ComplaintsPage({ role = "resident" }) {
                     </small>
                   </td>
                   <td>{item.category}</td>
+                  <td>{role === "owner" ? <select value={item.assignedStaffUser?._id || item.assignedStaffUser || ""} onChange={(event) => assign(item._id, event.target.value)}><option value="">Unassigned</option>{staff.map((person) => <option value={person._id} key={person._id}>{person.name} · {person.department || person.block}</option>)}</select> : (item.assignedStaff || "Waiting for assignment")}</td>
+                  <td>
+                    {(item.assignedStaffPhone || item.assignedStaffUser?.phone) ? (
+                      <a className="worker-phone" href={`tel:${item.assignedStaffPhone || item.assignedStaffUser.phone}`}>
+                        {item.assignedStaffPhone || item.assignedStaffUser.phone}
+                      </a>
+                    ) : (
+                      "Pending"
+                    )}
+                  </td>
+                  <td>
+                    {item.staffRating ? (
+                      <span className="rating-value">★ {item.staffRating}/5</span>
+                    ) : role === "resident" && item.assignedStaffUser ? (
+                      <form className="rating-form" onSubmit={(event) => rate(event, item._id)}>
+                        <select name="rating" defaultValue="5" aria-label="Worker rating">
+                          <option value="5">5 stars</option>
+                          <option value="4">4 stars</option>
+                          <option value="3">3 stars</option>
+                          <option value="2">2 stars</option>
+                          <option value="1">1 star</option>
+                        </select>
+                        <input name="review" placeholder="Review (optional)" aria-label="Worker review" />
+                        <button type="submit">Rate</button>
+                      </form>
+                    ) : (
+                      "Not rated"
+                    )}
+                  </td>
                   <td>
                     <Status value={item.status} />
                   </td>
@@ -1899,7 +2040,7 @@ function Providers() {
     </Shell>
   );
 }
-function Notifications() {
+function Notifications({ role = "resident" }) {
   const [items, setItems] = useState([]);
   useEffect(() => {
     api
@@ -1908,10 +2049,10 @@ function Notifications() {
       .catch(() => {});
   }, []);
   return (
-    <Shell role="resident">
+    <Shell role={role === "staff" ? "staff" : "resident"}>
       <Header
         title="Notifications"
-        desc="Invoice, payment and property updates from your owner."
+        desc={role === "staff" ? "New tasks and work updates assigned to you." : "Invoice, payment and property updates from your owner."}
       />
       <section className="panel notices">
         {items.length ? (
@@ -1927,6 +2068,85 @@ function Notifications() {
         ) : (
           <div className="empty-state">No notifications yet.</div>
         )}
+      </section>
+    </Shell>
+  );
+}
+function OwnerAnalytics() {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+  useEffect(() => api.analytics().then(setData).catch((err) => setError(err.message)), []);
+  if (error) return <Shell><Header title="Apartment intelligence" desc="Analytics could not be loaded." /><p className="form-error">{error}</p></Shell>;
+  if (!data) return <Shell><Header title="Apartment intelligence" desc="Loading live complaint intelligence..." /><section className="panel empty-state">Loading dashboard...</section></Shell>;
+  const maxCategory = Math.max(...Object.values(data.category), 1);
+  return (
+    <Shell>
+      <Header title="Apartment intelligence" desc="Live complaints, SLAs, recurring issues and block-level patterns." />
+      <StatCards cards={[["Total complaints", data.counts.total, "All recorded reports"], ["Open complaints", data.counts.open, "Needs action"], ["Resolved", data.counts.resolved, "Closed or resolved"], ["Overdue", data.counts.overdue, "Past SLA"], ["Emergency", data.counts.emergency, "Priority alerts"], ["Recurring issues", data.recurring.length, "Three or more reports"]]} />
+      <div className="intelligence-grid">
+        <section className="panel intelligence-panel"><div className="panel-head"><h2>Complaints by category</h2><span>Live</span></div>{Object.entries(data.category).map(([name, count]) => <div className="bar-row" key={name}><b>{name}</b><span><i style={{ width: `${(count / maxCategory) * 100}%` }} /></span><strong>{count}</strong></div>)}</section>
+        <section className="panel intelligence-panel"><div className="panel-head"><h2>Block heatmap</h2><span>Click-ready summary</span></div>{Object.entries(data.blocks).map(([block, values]) => <div className="heat-row" key={block}><b>{block}</b><span>{Object.entries(values).map(([name, count]) => <em className={`heat-${name.toLowerCase()}`} key={name} title={`${name}: ${count}`}>{name} {count}</em>)}</span></div>)}</section>
+      </div>
+      <section className="panel intelligence-panel"><div className="panel-head"><h2>Priority alerts</h2><span>{data.counts.overdue} overdue</span></div>{data.recurring.length ? data.recurring.slice(0, 6).map((issue) => <div className="alert-row" key={`${issue.block}-${issue.category}`}><span>!</span><b>Recurring {issue.category} issue in {issue.block}<small>{issue.occurrences} reports based on stored complaint data. Management review recommended.</small></b></div>) : <div className="empty-state">No recurring issues detected.</div>}{data.complaints.filter((item) => item.status === "Overdue" || item.priority === "Emergency").slice(0, 8).map((item) => <div className="alert-row" key={item._id}><span>!</span><b>{item.complaintId} · {item.title}<small>{item.status} · {item.priority} · Expected {new Date(item.expectedResolutionAt).toLocaleString()}</small></b></div>)}</section>
+      <section className="panel intelligence-panel"><div className="panel-head"><h2>Complaint SLA table</h2><span>Created, assigned and expected resolution</span></div><div className="table-scroll"><table><thead><tr><th>Problem</th><th>Block</th><th>Created</th><th>Assigned</th><th>Expected</th><th>Status</th></tr></thead><tbody>{data.complaints.slice(0, 20).map((item) => <tr key={item._id}><td><b>{item.title}</b><small>{item.category} · {item.priority}</small></td><td>{item.block || item.resident?.block || item.flat}</td><td>{new Date(item.createdAt).toLocaleDateString()}</td><td>{item.assignedAt ? new Date(item.assignedAt).toLocaleDateString() : "Pending"}</td><td>{item.expectedResolutionAt ? new Date(item.expectedResolutionAt).toLocaleDateString() : "—"}</td><td><Status value={item.status} /></td></tr>)}</tbody></table></div></section>
+    </Shell>
+  );
+}
+function OwnerOperations() {
+  const [properties, setProperties] = useState([]); const [expenses, setExpenses] = useState([]); const [alerts, setAlerts] = useState([]); const [notices, setNotices] = useState([]); const [consumption, setConsumption] = useState([]); const [message, setMessage] = useState("");
+  const load = () => { api.properties().then(setProperties); api.expenses().then(setExpenses); api.alerts().then(setAlerts); api.notices().then(setNotices); api.consumption().then(setConsumption); };
+  useEffect(load, []);
+  const submit = async (event, action) => { event.preventDefault(); const form = new FormData(event.currentTarget); try { await action(Object.fromEntries(form.entries())); event.currentTarget.reset(); setMessage("Saved successfully."); load(); } catch (error) { setMessage(error.message); } };
+  const property = properties[0]?._id;
+  return <Shell><Header title="Operations" desc="Manage transparent expenses, notices, consumption and emergency broadcasts." /><div className="two-col"><form className="panel report" onSubmit={(event) => submit(event, (details) => api.createExpense({ ...details, property, amount: Number(details.amount), published: details.published === "on" }))}><h3>Add expense</h3><label>Category<input name="category" required placeholder="Security, cleaning, repairs" /></label><label>Amount<input name="amount" type="number" min="0" required /></label><label>Vendor<input name="vendor" required /></label><label>Date<input name="date" type="date" required /></label><label>Description<textarea name="description" rows="2" /></label><label className="check-label"><input name="published" type="checkbox" /> Publish to residents</label><Button type="submit"><Plus size={15} /> Save expense</Button></form><form className="panel report" onSubmit={(event) => submit(event, (details) => api.createAlert({ ...details, property }))}><h3>Emergency broadcast</h3><label>Type<select name="type"><option>Fire</option><option>Water supply</option><option>Electrical issue</option><option>Security</option><option>Lift emergency</option><option>Other</option></select></label><label>Title<input name="title" required /></label><label>Message<textarea name="message" rows="3" required /></label><label>Target<select name="target"><option>Entire apartment</option><option>Block</option><option>Floor/area</option></select></label><label>Target value<input name="targetValue" placeholder="Optional block or area" /></label><Button type="submit"><Zap size={15} /> Broadcast alert</Button></form></div><div className="two-col"><form className="panel report" onSubmit={(event) => submit(event, (details) => api.createNotice({ ...details, property, published: details.published === "on", translations: details.translationTitle && details.translationBody ? [{ language: details.translationLanguage || "Hindi", title: details.translationTitle, body: details.translationBody }] : [] }))}><h3>Create notice</h3><label>Title<input name="title" required /></label><label>Original notice<textarea name="body" rows="3" required /></label><label>Translation language<input name="translationLanguage" placeholder="Hindi (optional)" /></label><label>Translated title<input name="translationTitle" /></label><label>Translated body<textarea name="translationBody" rows="2" /></label><label className="check-label"><input name="published" type="checkbox" /> Publish to residents</label><Button type="submit"><Bell size={15} /> Save notice</Button></form><form className="panel report" onSubmit={(event) => submit(event, (details) => api.recordConsumption({ ...details, property, water: Number(details.water || 0), electricity: Number(details.electricity || 0) }))}><h3>Record consumption</h3><label>Month<input name="month" type="month" required /></label><label>Water units<input name="water" type="number" min="0" required /></label><label>Electricity units<input name="electricity" type="number" min="0" required /></label><Button type="submit"><Zap size={15} /> Save reading</Button></form></div>{message && <p className="form-success">{message}</p>}<div className="intelligence-grid"><section className="panel intelligence-panel"><div className="panel-head"><h2>Expenses</h2><span>{expenses.length} records</span></div>{expenses.slice(0, 8).map((item) => <div className="alert-row" key={item._id}><span>₹</span><b>{item.category} · ₹{item.amount.toLocaleString("en-IN")}<small>{item.vendor} · {new Date(item.date).toLocaleDateString()} {item.published ? "· Published" : "· Admin only"}</small></b></div>)}</section><section className="panel intelligence-panel"><div className="panel-head"><h2>Active emergency alerts</h2><span>{alerts.filter((item) => item.active).length}</span></div>{alerts.slice(0, 8).map((item) => <div className="alert-row" key={item._id}><span>!</span><b>{item.title}<small>{item.type} · {item.target} {item.targetValue}</small></b></div>)}</section></div><section className="panel intelligence-panel"><div className="panel-head"><h2>Notices and consumption</h2><span>{notices.length} notices · {consumption.length} readings</span></div>{notices.slice(0, 8).map((item) => <div className="alert-row" key={item._id}><span>i</span><b>{item.title}<small>{item.published ? "Published" : "Draft"} · {item.body}</small></b></div>)}{consumption.slice(-6).map((item) => <div className="alert-row" key={item._id}><span>≈</span><b>{new Date(item.month).toLocaleDateString("en-IN", { month: "short", year: "numeric" })}<small>Water {item.water} · Electricity {item.electricity}</small></b></div>)}</section></Shell>;
+}
+function ResidentUpdates() {
+  const [alerts, setAlerts] = useState([]); const [notices, setNotices] = useState([]); const [expenses, setExpenses] = useState([]); const [consumption, setConsumption] = useState([]); const [language, setLanguage] = useState("original");
+  useEffect(() => { api.alerts().then(setAlerts); api.notices().then(setNotices); api.expenses().then(setExpenses); api.consumption().then(setConsumption); }, []);
+  const unusual = consumption.length > 1 && consumption.at(-1).electricity > consumption.at(-2).electricity * 1.25;
+  return <Shell role="resident"><Header title="Community updates" desc="Published expenses, notices, emergency information and usage trends." action={<select value={language} onChange={(event) => setLanguage(event.target.value)}><option value="original">Original language</option><option value="Hindi">Hindi</option><option value="Marathi">Marathi</option></select>} />{alerts.map((item) => <section className="emergency-banner" key={item._id}><strong>! {item.type}</strong><b>{item.title}</b><p>{item.message}</p><small>{item.target} {item.targetValue}</small></section>)}<div className="two-col"><section className="panel intelligence-panel"><div className="panel-head"><h2>Notices</h2><span>{notices.length}</span></div>{notices.length ? notices.map((item) => { const translation = item.translations?.find((value) => value.language === language); return <div className="alert-row" key={item._id}><span>i</span><b>{translation?.title || item.title}<small>{translation?.body || item.body}</small></b></div>; }) : <div className="empty-state">No published notices.</div>}</section><section className="panel intelligence-panel"><div className="panel-head"><h2>Published expenses</h2><span>{expenses.length}</span></div>{expenses.length ? expenses.map((item) => <div className="alert-row" key={item._id}><span>₹</span><b>{item.category} · ₹{item.amount.toLocaleString("en-IN")}<small>{item.vendor} · {new Date(item.date).toLocaleDateString()}</small></b></div>) : <div className="empty-state">No published expenses.</div>}</section></div><section className="panel intelligence-panel"><div className="panel-head"><h2>Water and electricity trend</h2><span>{unusual ? "Unusual usage" : "Recorded usage"}</span></div>{unusual && <div className="alert-row"><span>!</span><b>Unusual electricity usage<small>Current usage is more than 25% above the previous recorded period.</small></b></div>}{consumption.slice(-6).map((item) => <div className="alert-row" key={item._id}><span>≈</span><b>{new Date(item.month).toLocaleDateString("en-IN", { month: "short", year: "numeric" })}<small>Water {item.water} · Electricity {item.electricity}</small></b></div>)}</section></Shell>;
+}
+function ResidentChecklist() {
+  const [items, setItems] = useState([]); const [message, setMessage] = useState(""); const checklist = items[0];
+  const save = async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); try { await api.saveChecklist({ type: form.get("type"), apartmentNumber: form.get("apartmentNumber"), parkingInformation: form.get("parkingInformation"), meterReading: form.get("meterReading"), pendingDues: Number(form.get("pendingDues") || 0), documents: form.get("documents"), keyHandover: form.get("keyHandover") === "on", finalInspection: form.get("finalInspection") === "on" }); setMessage("Checklist saved."); api.checklists().then(setItems); } catch (error) { setMessage(error.message); } };
+  useEffect(() => api.checklists().then(setItems), []);
+  const complete = checklist ? [checklist.keyHandover, checklist.finalInspection, checklist.parkingInformation, checklist.meterReading, checklist.documents].filter(Boolean).length : 0;
+  return <Shell role="resident"><Header title="Move-in / move-out checklist" desc="Track handover details and pending tasks." /><form className="panel report" onSubmit={save}><label>Type<select name="type" defaultValue={checklist?.type || "Move-in"}><option>Move-in</option><option>Move-out</option></select></label><label>Apartment number<input name="apartmentNumber" defaultValue={checklist?.apartmentNumber || ""} required /></label><label>Parking information<input name="parkingInformation" defaultValue={checklist?.parkingInformation || ""} /></label><label>Meter reading<input name="meterReading" defaultValue={checklist?.meterReading || ""} /></label><label>Pending dues<input name="pendingDues" type="number" min="0" defaultValue={checklist?.pendingDues || 0} /></label><label>Documents<input name="documents" defaultValue={checklist?.documents || ""} placeholder="Agreement, ID proof" /></label><label className="check-label"><input name="keyHandover" type="checkbox" defaultChecked={checklist?.keyHandover} /> Key handover complete</label><label className="check-label"><input name="finalInspection" type="checkbox" defaultChecked={checklist?.finalInspection} /> Final inspection complete</label>{message && <p className="form-success">{message}</p>}<Button type="submit"><CheckCircle2 size={15} /> Save checklist</Button></form><section className="panel insight-card"><span className="eyebrow">Completion</span><h2>{Math.round((complete / 5) * 100)}%</h2><p>Complete the remaining handover tasks to finish the checklist.</p></section></Shell>;
+}
+function StaffDashboard() {
+  const user = JSON.parse(localStorage.getItem("suvidha_user") || "{}");
+  const department = user.department || user.block || "your department";
+  return (
+    <Shell role="staff">
+      <Header
+        title="Staff dashboard"
+        desc="Your work is assigned automatically from resident reports."
+      />
+      <section className="workflow-grid">
+        <article className="workflow-card">
+          <CheckCircle2 size={20} />
+          <span>01</span>
+          <h3>Register</h3>
+          <p>Use your name, society and maintenance department when creating a staff account.</p>
+        </article>
+        <article className="workflow-card">
+          <CheckCircle2 size={20} />
+          <span>02</span>
+          <h3>Get assigned</h3>
+          <p>Complaints are matched to workers by society and department, such as Plumbing or Electrical.</p>
+        </article>
+        <article className="workflow-card">
+          <CheckCircle2 size={20} />
+          <span>03</span>
+          <h3>Start work</h3>
+          <p>Your assigned tasks and full resident report details appear in Assigned Complaints.</p>
+        </article>
+      </section>
+      <section className="panel staff-status">
+        <span className="eyebrow">Active staff profile</span>
+        <h2>{user.name || "Maintenance worker"}</h2>
+        <p>Department: <b>{department}</b></p>
+        <Button to="/staff/complaints"><ClipboardList size={15} /> View assigned tasks</Button>
       </section>
     </Shell>
   );
@@ -2045,10 +2265,11 @@ function App() {
           path="/owner/analytics"
           element={
             <Guard roles={["owner", "admin"]}>
-              <Simple role="owner" title="Analytics" />
+              <OwnerAnalytics />
             </Guard>
           }
         />
+        <Route path="/owner/operations" element={<Guard roles={["owner", "admin"]}><OwnerOperations /></Guard>} />
         <Route
           path="/resident"
           element={
@@ -2097,6 +2318,8 @@ function App() {
             </Guard>
           }
         />
+        <Route path="/resident/updates" element={<Guard roles={["resident"]}><ResidentUpdates /></Guard>} />
+        <Route path="/resident/checklist" element={<Guard roles={["resident"]}><ResidentChecklist /></Guard>} />
         <Route
           path="/resident/profile"
           element={
@@ -2109,7 +2332,7 @@ function App() {
           path="/staff"
           element={
             <Guard roles={["maintenance_staff"]}>
-              <Simple role="staff" title="Staff dashboard" />
+              <StaffDashboard />
             </Guard>
           }
         />
@@ -2118,6 +2341,14 @@ function App() {
           element={
             <Guard roles={["maintenance_staff"]}>
               <ComplaintsPage role="staff" />
+            </Guard>
+          }
+        />
+        <Route
+          path="/staff/notifications"
+          element={
+            <Guard roles={["maintenance_staff"]}>
+              <Notifications role="staff" />
             </Guard>
           }
         />

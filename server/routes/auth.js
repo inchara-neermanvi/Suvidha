@@ -17,7 +17,7 @@ function authRateLimit(req, res, next) {
   next()
 }
 const tokenFor = user => jwt.sign({ userId: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '7d' })
-const publicUser = user => ({ id: user._id, name: user.name, email: user.email, role: user.role, phone: user.phone, society: user.society, flat: user.flat, block: user.block, floor: user.floor, propertyIds: user.propertyIds, apartmentId: user.apartmentId, leaseStart: user.leaseStart, leaseEnd: user.leaseEnd })
+const publicUser = user => ({ id: user._id, name: user.name, email: user.email, role: user.role, phone: user.phone, society: user.society, department: user.department, flat: user.flat, block: user.block, floor: user.floor, propertyIds: user.propertyIds, apartmentId: user.apartmentId, leaseStart: user.leaseStart, leaseEnd: user.leaseEnd })
 
 async function login(req, res, role) {
   const user = await User.findOne({ email: req.body.email?.toLowerCase() })
@@ -65,7 +65,7 @@ router.post('/staff/register', authRateLimit, async (req, res, next) => {
     const { name, email, password, phone, society, department } = req.body
     if (!name || !email || !password || !department) return res.status(400).json({ message: 'Name, email, password and department are required' })
     if (await User.findOne({ email: email.toLowerCase() })) return res.status(409).json({ message: 'Email is already registered' })
-    const staff = await User.create({ name, email, phone, password: await bcrypt.hash(password, 12), role: 'maintenance_staff', society, block: department })
+    const staff = await User.create({ name, email, phone, password: await bcrypt.hash(password, 12), role: 'maintenance_staff', society, department, block: department })
     res.status(201).json({ token: tokenFor(staff), user: publicUser(staff) })
   } catch (error) { next(error) }
 })
